@@ -15,7 +15,7 @@ class MyBot(commands.Bot):
         self.start_time = discord.utils.utcnow()
     
     async def setup_hook(self):
-        valid_cogs = ['moderation', 'welcome', 'saying', 'tiktoklive', 'reactionrole', 'embedcreator', 'security', 'tickets', 'utilities', 'debug', 'ai_assistant', 'authorization']
+        valid_cogs = ['moderation', 'welcome', 'saying', 'reactionrole', 'embedcreator', 'security', 'tickets', 'utilities', 'debug', 'ai_assistant', 'authorization']
         
         for cog_name in valid_cogs:
             try:
@@ -251,3 +251,4 @@ if __name__ == "__main__":
         print("💡 Asegúrate de que tu archivo config.py tenga:")
 
         print("   BOT_TOKEN = 'tu_token_aqui'")
+
