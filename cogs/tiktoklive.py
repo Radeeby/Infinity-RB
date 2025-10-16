@@ -68,19 +68,19 @@ class TikTokAlerts(commands.Cog):
         try:
             # Método 1: Usando API no oficial de TikTok
             async with self.session.get(
-                f"https://www.tiktok.com/@{username}/live",
+                f"https://www.tiktok.com/@{username}",
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
                 }
             ) as response:
                 html = await response.text()
                 
                 # Buscar indicadores de live en el HTML
                 live_indicators = [
-                    "is_live": True,
+                    "is_live",
                     "liveRoom",
-                    "room_status\":1",
-                    "is_live_stream"
+                    "room_status",
+                    "live_stream"
                 ]
                 
                 return any(indicator in html for indicator in live_indicators)
@@ -103,7 +103,8 @@ class TikTokAlerts(commands.Cog):
                     data = await response.json()
                     return data.get("userInfo", {})
                 return {}
-        except:
+        except Exception as e:
+            self.logger.error(f"Error getting user info for {username}: {e}")
             return {}
     
     async def send_live_alert(self, username, user_data):
@@ -117,10 +118,10 @@ class TikTokAlerts(commands.Cog):
         )
         
         # Información del usuario
-        if user_info:
+        if user_info and "user" in user_info:
             embed.set_author(
-                name=user_info.get("user", {}).get("nickname", username),
-                icon_url=user_info.get("user", {}).get("avatarThumb", "")
+                name=user_info["user"].get("nickname", username),
+                icon_url=user_info["user"].get("avatarThumb", "")
             )
             embed.add_field(
                 name="👤 Usuario",
@@ -129,7 +130,7 @@ class TikTokAlerts(commands.Cog):
             )
             embed.add_field(
                 name="📊 Seguidores",
-                value=f"{user_info.get('user', {}).get('followerCount', 'N/A'):,}",
+                value=f"{user_info['user'].get('followerCount', 'N/A'):,}",
                 inline=True
             )
         else:
@@ -202,7 +203,7 @@ class TikTokAlerts(commands.Cog):
             if not user_info:
                 await ctx.send("❌ No se pudo encontrar el usuario de TikTok.", ephemeral=True)
                 return
-        except:
+        except Exception as e:
             await ctx.send("❌ Error al verificar el usuario de TikTok.", ephemeral=True)
             return
         
@@ -220,9 +221,19 @@ class TikTokAlerts(commands.Cog):
             description=f"Ahora monitoreando: **@{username}**",
             color=discord.Color.green()
         )
-        embed.add_field(name="👤 Nombre", value=user_info.get("user", {}).get("nickname", "N/A"), inline=True)
-        embed.add_field(name="📊 Seguidores", value=f"{user_info.get('user', {}).get('followerCount', 'N/A'):,}", inline=True)
-        embed.set_thumbnail(url=user_info.get("user", {}).get("avatarThumb", ""))
+        
+        if user_info and "user" in user_info:
+            embed.add_field(
+                name="👤 Nombre", 
+                value=user_info["user"].get("nickname", "N/A"), 
+                inline=True
+            )
+            embed.add_field(
+                name="📊 Seguidores", 
+                value=f"{user_info['user'].get('followerCount', 'N/A'):,}", 
+                inline=True
+            )
+            embed.set_thumbnail(url=user_info["user"].get("avatarThumb", ""))
         
         await ctx.send(embed=embed)
     
@@ -337,7 +348,7 @@ class TikTokAlerts(commands.Cog):
     async def check_lives_error(self, error):
         """Maneja errores en el loop de verificación"""
         self.logger.error(f"Error in check_lives loop: {error}")
-        await asyncio.sleep(60)  # Esperar antes de reintentar
+        await asyncio.sleep(60)
 
 async def setup(bot):
     await bot.add_cog(TikTokAlerts(bot))
