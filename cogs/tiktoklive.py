@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 import logging
+import re
 
 class TikTokAlerts(commands.Cog):
     def __init__(self, bot):
@@ -36,9 +37,9 @@ class TikTokAlerts(commands.Cog):
         if self.session:
             asyncio.create_task(self.session.close())
     
-    @tasks.loop(minutes=2)
+    @tasks.loop(minutes=3)
     async def check_lives(self):
-        """Verifica cada 2 minutos si los usuarios están en vivo"""
+        """Verifica cada 3 minutos si los usuarios están en vivo"""
         if not self.config["monitored_users"]:
             return
         
@@ -47,7 +48,7 @@ class TikTokAlerts(commands.Cog):
         
         for username, user_data in self.config["monitored_users"].items():
             try:
-                is_live = await self.check_tiktok_live(username)
+                is_live = await self.check_tiktok_live_simple(username)
                 
                 if is_live and not user_data.get("is_live", False):
                     # Usuario acaba de empezar directo
@@ -63,93 +64,85 @@ class TikTokAlerts(commands.Cog):
                     print(f"⚫ LIVE TERMINADO: @{username}")
                     
             except Exception as e:
-                self.logger.error(f"Error checking {username}: {e}")
+                print(f"❌ Error checking {username}: {str(e)}")
     
-    async def check_tiktok_live(self, username):
-        """Verifica si un usuario de TikTok está en vivo usando múltiples métodos"""
+    async def check_tiktok_live_simple(self, username):
+        """Método simple para verificar si está en vivo"""
         try:
-            # Método 1: Verificar página principal
             async with self.session.get(
                 f"https://www.tiktok.com/@{username}",
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "DNT": "1",
-                    "Connection": "keep-alive",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "none",
-                    "Cache-Control": "max-age=0"
-                }
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache"
+                },
+                timeout=10
             ) as response:
                 if response.status != 200:
                     return False
                 
                 html = await response.text()
                 
-                # Buscar indicadores de live
-                live_indicators = [
+                # Buscar patrones simples de live
+                live_patterns = [
+                    'isLive":true',
                     '"liveRoom":{',
-                    '"webapp.live-room"',
-                    'is_live":true',
-                    'room_status":1',
-                    'live_stream',
                     'LIVE</span>',
-                    'isLive":true'
+                    'is_live":true',
+                    'room_status":1'
                 ]
                 
-                return any(indicator in html for indicator in live_indicators)
+                for pattern in live_patterns:
+                    if pattern in html:
+                        return True
                 
+                return False
+                
+        except asyncio.TimeoutError:
+            print(f"⏰ Timeout verificando @{username}")
+            return False
         except Exception as e:
-            print(f"❌ Error verificando live de @{username}: {e}")
+            print(f"❌ Error en check simple @{username}: {str(e)}")
             return False
     
-    async def get_tiktok_user_info(self, username):
-        """Obtiene información del usuario de TikTok con métodos alternativos"""
-        try:
-            # Método alternativo 1: API no oficial
-            async with self.session.get(
-                f"https://www.tiktok.com/node/share/user/@{username}",
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json",
-                    "Referer": f"https://www.tiktok.com/@{username}"
-                }
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # Verificar estructura de respuesta
-                    if data and isinstance(data, dict):
-                        return data.get("userInfo", {})
-                
-                return {}
-                
-        except Exception as e:
-            print(f"❌ Error obteniendo info de @{username}: {e}")
-            return {}
-    
-    async def verify_tiktok_user(self, username):
-        """Verifica que el usuario de TikTok existe"""
+    async def verify_tiktok_user_simple(self, username):
+        """Verificación simple de que el usuario existe"""
         try:
             async with self.session.get(
                 f"https://www.tiktok.com/@{username}",
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                }
+                },
+                timeout=10
             ) as response:
-                # Si la página carga, el usuario existe
                 if response.status == 200:
                     html = await response.text()
-                    # Verificar que no es página de error
-                    if "User doesn't exist" not in html and "This page is not available" not in html:
-                        return True
-                return False
-                
+                    # Si contiene estos textos, probablemente el usuario no existe
+                    error_indicators = [
+                        "User doesn't exist",
+                        "This page isn't available",
+                        "Couldn't find this account",
+                        "Page Not Found"
+                    ]
+                    
+                    if any(error in html for error in error_indicators):
+                        return False
+                    
+                    # Si llegamos aquí y la página carga, probablemente existe
+                    return True
+                elif response.status == 404:
+                    return False
+                else:
+                    print(f"⚠️ Status code {response.status} para @{username}")
+                    return False
+                    
+        except asyncio.TimeoutError:
+            print(f"⏰ Timeout verificando usuario @{username}")
+            return False
         except Exception as e:
-            print(f"❌ Error verificando usuario @{username}: {e}")
+            print(f"❌ Error verificando usuario @{username}: {str(e)}")
             return False
     
     async def send_live_alert(self, username, user_data):
@@ -157,18 +150,16 @@ class TikTokAlerts(commands.Cog):
         embed = discord.Embed(
             title="🎥 **¡NUEVO DIRECTO EN TIKTOK!**",
             description=f"**@{username}** está en vivo",
-            color=0x00f2ea,  # Color de TikTok
+            color=0x00f2ea,
             timestamp=datetime.utcnow()
         )
         
-        # Información básica
         embed.add_field(
             name="👤 Usuario",
             value=f"@{username}",
             inline=True
         )
         
-        # Enlace al directo
         embed.add_field(
             name="🔗 Enlace al Directo",
             value=f"[¡Haz click aquí para ver el directo!](https://www.tiktok.com/@{username}/live)",
@@ -176,7 +167,7 @@ class TikTokAlerts(commands.Cog):
         )
         
         embed.set_footer(text="Sistema de Alertas de TikTok")
-        embed.set_thumbnail(url="https://i.imgur.com/7Y1f4yS.png")  # Logo TikTok
+        embed.set_thumbnail(url="https://i.imgur.com/7Y1f4yS.png")
         
         # Enviar a todos los canales configurados
         for guild_id, guild_data in self.config["guilds"].items():
@@ -186,7 +177,6 @@ class TikTokAlerts(commands.Cog):
                     if guild:
                         channel = guild.get_channel(int(guild_data["alert_channel"]))
                         if channel:
-                            # Mención de rol si está configurado
                             mention = ""
                             if "alert_role" in guild_data:
                                 mention = f"<@&{guild_data['alert_role']}>"
@@ -194,7 +184,7 @@ class TikTokAlerts(commands.Cog):
                             await channel.send(mention, embed=embed)
                             print(f"✅ Alerta enviada a {guild.name} - #{channel.name}")
                 except Exception as e:
-                    print(f"❌ Error enviando alerta al servidor {guild_id}: {e}")
+                    print(f"❌ Error enviando alerta: {str(e)}")
     
     @commands.hybrid_command(name="tiktok_setup", description="Configura el canal de alertas de TikTok")
     @commands.has_permissions(administrator=True)
@@ -222,22 +212,31 @@ class TikTokAlerts(commands.Cog):
         # Limpiar el username
         username = username.replace('@', '').strip().lower()
         
+        # Validar formato de username
+        if not re.match(r'^[a-zA-Z0-9._]+$', username):
+            await ctx.send("❌ Nombre de usuario inválido. Solo se permiten letras, números, puntos y guiones bajosos.", ephemeral=True)
+            return
+        
         if username in self.config["monitored_users"]:
             await ctx.send("❌ Este usuario ya está siendo monitoreado.", ephemeral=True)
             return
         
-        # Verificar que el usuario existe
         await ctx.defer()
         
         try:
-            user_exists = await self.verify_tiktok_user(username)
+            print(f"🔍 Verificando usuario: @{username}")
+            user_exists = await self.verify_tiktok_user_simple(username)
             
             if not user_exists:
-                await ctx.send("❌ No se pudo encontrar el usuario de TikTok. Verifica que el nombre de usuario sea correcto.", ephemeral=True)
+                await ctx.send(
+                    "❌ No se pudo encontrar el usuario de TikTok. Verifica que:\n"
+                    "• El nombre de usuario sea correcto\n"
+                    "• La cuenta sea pública\n"
+                    "• El usuario exista\n\n"
+                    f"**URL probada:** https://www.tiktok.com/@{username}",
+                    ephemeral=True
+                )
                 return
-            
-            # Intentar obtener información del usuario
-            user_info = await self.get_tiktok_user_info(username)
             
             # Agregar usuario
             self.config["monitored_users"][username] = {
@@ -255,37 +254,25 @@ class TikTokAlerts(commands.Cog):
                 color=discord.Color.green()
             )
             
-            if user_info and "user" in user_info:
-                user_data = user_info["user"]
-                embed.add_field(
-                    name="👤 Nombre", 
-                    value=user_data.get("nickname", "N/A"), 
-                    inline=True
-                )
-                embed.add_field(
-                    name="📊 Seguidores", 
-                    value=f"{user_data.get('followerCount', 'N/A'):,}", 
-                    inline=True
-                )
-                if user_data.get("avatarThumb"):
-                    embed.set_thumbnail(url=user_data["avatarThumb"])
-            else:
-                embed.add_field(
-                    name="ℹ️ Información",
-                    value="Usuario verificado correctamente. La información detallada no está disponible temporalmente.",
-                    inline=False
-                )
-            
             embed.add_field(
                 name="🔍 Estado",
-                value="El sistema verificará automáticamente cada 2 minutos si está en vivo.",
+                value="El sistema verificará automáticamente cada 3 minutos si está en vivo.",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="🔗 Perfil",
+                value=f"[Ver perfil de TikTok](https://www.tiktok.com/@{username})",
                 inline=False
             )
             
             await ctx.send(embed=embed)
+            print(f"✅ Usuario @{username} agregado exitosamente")
             
         except Exception as e:
-            await ctx.send(f"❌ Error al agregar el usuario: {str(e)}", ephemeral=True)
+            error_msg = f"❌ Error al agregar el usuario: {str(e)}"
+            print(error_msg)
+            await ctx.send(error_msg, ephemeral=True)
     
     @commands.hybrid_command(name="tiktok_remove", description="Remueve un usuario de TikTok del monitoreo")
     @commands.has_permissions(administrator=True)
@@ -306,6 +293,7 @@ class TikTokAlerts(commands.Cog):
             color=discord.Color.orange()
         )
         await ctx.send(embed=embed)
+        print(f"✅ Usuario @{username} removido")
     
     @commands.hybrid_command(name="tiktok_list", description="Lista todos los usuarios de TikTok monitoreados")
     async def list_tiktok_users(self, ctx):
@@ -340,7 +328,15 @@ class TikTokAlerts(commands.Cog):
         await ctx.defer()
         
         try:
-            is_live = await self.check_tiktok_live(username)
+            # Primero verificar que existe
+            user_exists = await self.verify_tiktok_user_simple(username)
+            
+            if not user_exists:
+                await ctx.send("❌ No se pudo encontrar el usuario de TikTok.", ephemeral=True)
+                return
+            
+            # Luego verificar si está en vivo
+            is_live = await self.check_tiktok_live_simple(username)
             
             embed = discord.Embed(
                 title="🔍 Verificación de TikTok",
@@ -356,13 +352,11 @@ class TikTokAlerts(commands.Cog):
                 value="🔴 **EN VIVO**" if is_live else "⚫ Offline",
                 inline=True
             )
-            
-            if is_live:
-                embed.add_field(
-                    name="🔗 Enlace",
-                    value=f"[Ver directo](https://www.tiktok.com/@{username}/live)",
-                    inline=False
-                )
+            embed.add_field(
+                name="🔗 Enlaces",
+                value=f"[Perfil](https://www.tiktok.com/@{username}) • [Live](https://www.tiktok.com/@{username}/live)",
+                inline=False
+            )
             
             await ctx.send(embed=embed)
             
@@ -379,7 +373,6 @@ class TikTokAlerts(commands.Cog):
             await ctx.send("❌ Primero configura el canal de alertas con `/tiktok_setup`", ephemeral=True)
             return
         
-        # Crear embed de prueba
         embed = discord.Embed(
             title="🎥 **¡PRUEBA DE ALERTA DE TIKTOK!**",
             description="Esta es una alerta de prueba del sistema de TikTok",
@@ -407,34 +400,56 @@ class TikTokAlerts(commands.Cog):
         else:
             await ctx.send("❌ No se pudo encontrar el canal de alertas.", ephemeral=True)
     
-    @commands.hybrid_command(name="tiktok_role", description="Configura un rol para mencionar en las alertas")
+    @commands.hybrid_command(name="tiktok_debug", description="Información de debug para TikTok")
     @commands.has_permissions(administrator=True)
-    async def set_alert_role(self, ctx, role: discord.Role):
-        """Configura un rol para ser mencionado en las alertas"""
-        guild_id = str(ctx.guild.id)
+    async def tiktok_debug(self, ctx, username: str):
+        """Comando de debug para TikTok"""
+        username = username.replace('@', '').strip().lower()
+        await ctx.defer()
         
-        if guild_id not in self.config["guilds"]:
-            self.config["guilds"][guild_id] = {}
-        
-        self.config["guilds"][guild_id]["alert_role"] = role.id
-        self.save_config()
-        
-        embed = discord.Embed(
-            title="✅ Rol de Alertas Configurado",
-            description=f"El rol {role.mention} será mencionado en las alertas de TikTok",
-            color=discord.Color.green()
-        )
-        await ctx.send(embed=embed)
+        try:
+            # Probar conexión básica
+            async with self.session.get(
+                f"https://www.tiktok.com/@{username}",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                },
+                timeout=10
+            ) as response:
+                status = response.status
+                html_length = len(await response.text())
+            
+            embed = discord.Embed(
+                title="🐛 Debug TikTok",
+                color=0x00f2ea
+            )
+            embed.add_field(name="👤 Usuario", value=f"@{username}", inline=True)
+            embed.add_field(name="📡 Status Code", value=status, inline=True)
+            embed.add_field(name="📄 HTML Length", value=html_length, inline=True)
+            embed.add_field(name="🔗 URL", value=f"https://www.tiktok.com/@{username}", inline=False)
+            
+            if status == 200:
+                embed.add_field(name="✅ Página carga", value="Sí", inline=True)
+            else:
+                embed.add_field(name="❌ Página carga", value="No", inline=True)
+            
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            await ctx.send(f"❌ Error en debug: {str(e)}", ephemeral=True)
     
     @check_lives.before_loop
     async def before_check_lives(self):
         """Espera a que el bot esté listo antes de empezar el loop"""
         await self.bot.wait_until_ready()
+        # Inicializar session
+        if self.session is None:
+            self.session = aiohttp.ClientSession()
     
     @check_lives.error
     async def check_lives_error(self, error):
         """Maneja errores en el loop de verificación"""
-        print(f"❌ Error en check_lives: {error}")
+        print(f"❌ Error en check_lives: {str(error)}")
         await asyncio.sleep(60)
 
 async def setup(bot):
