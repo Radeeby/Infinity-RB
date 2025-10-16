@@ -1,0 +1,13 @@
+{
+    "1411901410202751018": {
+        "channel_id": 1428169709760548884,
+        "type": "gif",
+        "message": "BIENVENIDX AL SERVER",
+        "background_image": "https://i.ibb.co/S4vqTQLz/Tropical-Grid-Tropicalera.gif"
+    },
+    "1079582550953054349": {
+        "channel_id": 1129808207091605614,
+        "type": "gif",
+        "message": "\u00a1Bienvenido {member.mention} al servidor {guild.name}! \ud83c\udf89"
+    }
+}
