@@ -3,8 +3,6 @@ from discord.ext import commands
 from discord import app_commands
 import json
 import os
-from PIL import Image, ImageDraw, ImageFont
-import io
 import aiohttp
 import time
 
@@ -69,7 +67,7 @@ class Welcome(commands.Cog):
         
         # Obtener el mensaje y tipo de bienvenida
         message = config.get('message', '¡Bienvenido {member.mention} al servidor!')
-        welcome_type = config.get('type', 'embed')  # embed, image, gif
+        welcome_type = config.get('type', 'embed')  # embed, gif
         
         # Reemplazar variables en el mensaje
         formatted_message = message.format(
@@ -81,8 +79,6 @@ class Welcome(commands.Cog):
         try:
             if welcome_type == 'embed':
                 await self.send_embed_welcome(channel, member, formatted_message, config)
-            elif welcome_type == 'image':
-                await self.send_image_welcome(channel, member, formatted_message, config)
             elif welcome_type == 'gif':
                 await self.send_gif_welcome(channel, member, formatted_message, config)
             
@@ -130,18 +126,7 @@ class Welcome(commands.Cog):
         if config.get('background_image'):
             embed.set_image(url=config['background_image'])
         
-        # NO enviar footer con ID
         await channel.send(embed=embed)
-    
-    async def send_image_welcome(self, channel, member, message, config):
-        """Envía una imagen personalizada de bienvenida"""
-        try:
-            # Por ahora, usar embed como fallback
-            await self.send_embed_welcome(channel, member, message, config)
-                
-        except Exception as e:
-            print(f"Error creando imagen de bienvenida: {e}")
-            await self.send_embed_welcome(channel, member, message, config)
     
     async def send_gif_welcome(self, channel, member, message, config):
         """Envía un GIF de bienvenida"""
@@ -174,6 +159,15 @@ class Welcome(commands.Cog):
                          tipo: str = "embed"):
         """Comando para configurar las bienvenidas"""
         
+        # Validar el tipo
+        valid_types = ["embed", "gif"]
+        if tipo.lower() not in valid_types:
+            await interaction.response.send_message(
+                f"❌ Tipo inválido. Tipos disponibles: {', '.join(valid_types)}", 
+                ephemeral=True
+            )
+            return
+        
         guild_id = str(interaction.guild.id)
         
         if guild_id not in self.welcome_data:
@@ -202,9 +196,6 @@ class Welcome(commands.Cog):
     @set_welcome.autocomplete('tipo')
     async def set_welcome_autocomplete(self, interaction: discord.Interaction, current: str):
         """Autocomplete para los tipos de bienvenida"""
-        if interaction.response.is_done():
-            return []
-        
         tipos = ["embed", "gif"]
         choices = [
             app_commands.Choice(name=tipo, value=tipo)
@@ -221,6 +212,13 @@ class Welcome(commands.Cog):
         if guild_id not in self.welcome_data:
             await interaction.response.send_message("❌ Primero configura el canal de bienvenidas con `/setwelcome`", ephemeral=True)
             return
+        
+        # Validar que el mensaje tenga las variables necesarias
+        if "{member.mention}" not in mensaje:
+            await interaction.response.send_message(
+                "⚠️ Recomendado: Incluye `{member.mention}` en el mensaje para mencionar al usuario",
+                ephemeral=True
+            )
         
         self.welcome_data[guild_id]['message'] = mensaje
         self.save_welcome_data()
@@ -302,14 +300,44 @@ class Welcome(commands.Cog):
             return
         
         if url:
+            # Validar que sea una URL válida
+            if not url.startswith(('http://', 'https://')):
+                await interaction.response.send_message("❌ Por favor proporciona una URL válida (http:// o https://)", ephemeral=True)
+                return
+            
             self.welcome_data[guild_id]['background_image'] = url
             self.save_welcome_data()
-            await interaction.response.send_message(f"✅ Imagen de fondo establecida: {url}", ephemeral=True)
+            await interaction.response.send_message(f"✅ Imagen de fondo establecida!", ephemeral=True)
         else:
             # Eliminar la imagen de fondo si no se proporciona URL
             self.welcome_data[guild_id].pop('background_image', None)
             self.save_welcome_data()
             await interaction.response.send_message("✅ Imagen de fondo eliminada", ephemeral=True)
+    
+    @app_commands.command(name="welcomegif", description="Establece un GIF para las bienvenidas")
+    @app_commands.default_permissions(administrator=True)
+    async def set_welcome_gif(self, interaction: discord.Interaction, url: str = None):
+        """Configura un GIF para las bienvenidas tipo GIF"""
+        guild_id = str(interaction.guild.id)
+        
+        if guild_id not in self.welcome_data:
+            await interaction.response.send_message("❌ Primero configura el canal de bienvenidas con `/setwelcome`", ephemeral=True)
+            return
+        
+        if url:
+            # Validar que sea una URL válida
+            if not url.startswith(('http://', 'https://')):
+                await interaction.response.send_message("❌ Por favor proporciona una URL válida (http:// o https://)", ephemeral=True)
+                return
+            
+            self.welcome_data[guild_id]['gif_url'] = url
+            self.save_welcome_data()
+            await interaction.response.send_message(f"✅ GIF de bienvenida establecido!", ephemeral=True)
+        else:
+            # Eliminar el GIF si no se proporciona URL
+            self.welcome_data[guild_id].pop('gif_url', None)
+            self.save_welcome_data()
+            await interaction.response.send_message("✅ GIF de bienvenida eliminado", ephemeral=True)
     
     @app_commands.command(name="welcomesettings", description="Configura qué información mostrar en las bienvenidas")
     @app_commands.default_permissions(administrator=True)
@@ -354,12 +382,15 @@ class Welcome(commands.Cog):
         
         embed.add_field(name="Canal", value=channel.mention if channel else "No configurado", inline=True)
         embed.add_field(name="Tipo", value=config.get('type', 'embed'), inline=True)
-        embed.add_field(name="Mensaje", value=config.get('message', 'Por defecto'), inline=False)
+        embed.add_field(name="Mensaje", value=config.get('message', 'Por defecto')[:100] + "..." if len(config.get('message', '')) > 100 else config.get('message', 'Por defecto'), inline=False)
         embed.add_field(name="Mostrar fecha ingreso", value="✅ Sí" if config.get('show_join_date', True) else "❌ No", inline=True)
         embed.add_field(name="Mostrar edad cuenta", value="✅ Sí" if config.get('show_account_age', True) else "❌ No", inline=True)
         
         if config.get('background_image'):
-            embed.add_field(name="Imagen de fondo", value=config['background_image'], inline=False)
+            embed.add_field(name="Imagen de fondo", value="✅ Configurada", inline=True)
+        
+        if config.get('gif_url'):
+            embed.add_field(name="GIF personalizado", value="✅ Configurado", inline=True)
         
         await interaction.response.send_message(embed=embed)
 
