@@ -6,4 +6,4 @@ builder = "heroku/buildpacks:20"
 2 = "heroku/python"
 
 [build.apt]
-packages = ["ffmpeg"]
+packages = ["ffmpeg", "libopus0", "libnacl-dev"]
