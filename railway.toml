@@ -1,0 +1,9 @@
+[build]
+builder = "heroku/buildpacks:20"
+
+[build.buildpacks]
+1 = "heroku-community/apt"
+2 = "heroku/python"
+
+[build.apt]
+packages = ["ffmpeg"]
