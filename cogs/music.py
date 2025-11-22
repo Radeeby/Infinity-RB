@@ -5,7 +5,7 @@ import yt_dlp
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-# Configuración de yt-dlp SIMPLIFICADA y FUNCIONAL
+# Configuración de yt-dlp para obtener URLs directas
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -51,22 +51,17 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if not data:
             return None
 
-        if stream:
-            audio_url = data['url']
-        else:
-            audio_url = ytdl.prepare_filename(data)
-
+        # Obtener la URL del audio directamente
+        audio_url = data['url']
+        
         try:
-            # Intentar con FFmpegOpusAudio primero
-            return cls(discord.FFmpegOpusAudio(audio_url), data=data)
+            # Usar discord.FFmpegPCMAudio sin opciones complejas
+            # Esto debería funcionar si la URL es compatible
+            source = discord.FFmpegPCMAudio(audio_url)
+            return cls(source, data=data)
         except Exception as e:
-            print(f"Error con FFmpegOpusAudio: {e}")
-            try:
-                # Fallback a PCMAudio
-                return cls(discord.FFmpegPCMAudio(audio_url, options='-vn'), data=data)
-            except Exception as e2:
-                print(f"Error incluso con PCMAudio: {e2}")
-                return None
+            print(f"Error creando fuente de audio: {e}")
+            return None
 
     def parse_duration(self, duration):
         if not duration:
