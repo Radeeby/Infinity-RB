@@ -5,7 +5,7 @@ import yt_dlp
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-# Configuración de yt-dlp para usar formato opus
+# Configuración de yt-dlp SIMPLIFICADA y FUNCIONAL
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -18,7 +18,6 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
-    'format_sort': ['acodec:opus', 'bestaudio[acodec=opus]', 'bestaudio/best'],
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -53,15 +52,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
             return None
 
         if stream:
-            # Buscar formato opus primero
-            for fmt in data.get('formats', []):
-                if fmt.get('acodec') == 'opus' and fmt.get('ext') == 'webm':
-                    audio_url = fmt['url']
-                    try:
-                        return cls(discord.FFmpegOpusAudio(audio_url), data=data)
-                    except:
-                        continue
-            
             audio_url = data['url']
         else:
             audio_url = ytdl.prepare_filename(data)
