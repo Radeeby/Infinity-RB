@@ -3,5 +3,5 @@ builder = "NIXPACKS"
 
 [build.packages]
 ffmpeg = "*"
-libopus = "*"
+opus = "*"
 libsodium = "*"
