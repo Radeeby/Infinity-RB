@@ -1,9 +1,7 @@
 [build]
-builder = "heroku/buildpacks:20"
+builder = "NIXPACKS"
 
-[build.buildpacks]
-1 = "heroku-community/apt"
-2 = "heroku/python"
-
-[build.apt]
-packages = ["ffmpeg", "libopus0", "libnacl-dev"]
+[build.packages]
+ffmpeg = "*"
+libopus = "*"
+libsodium = "*"
