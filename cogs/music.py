@@ -4,9 +4,8 @@ import asyncio
 import yt_dlp
 import os
 from concurrent.futures import ThreadPoolExecutor
-import re
 
-# Configuración de yt-dlp
+# Configuración de yt-dlp para usar formato opus
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -19,12 +18,7 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'ytsearch',
     'source_address': '0.0.0.0',
-}
-
-# FFMPEG OPTIONS MODIFICADAS para Railway
-ffmpeg_options = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
-    'options': '-vn -b:a 128k -ac 2'
+    'format_sort': ['acodec:opus', 'bestaudio[acodec=opus]', 'bestaudio/best'],
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -47,7 +41,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
             try:
                 data = ytdl.extract_info(url, download=not stream)
                 if 'entries' in data:
-                    # Tomar el primer resultado de búsqueda
                     data = data['entries'][0]
                 return data
             except Exception as e:
@@ -59,19 +52,30 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if not data:
             return None
 
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
-        
-        # MODIFICADO: Sin especificar executable, dejar que discord.py lo maneje
+        if stream:
+            # Buscar formato opus primero
+            for fmt in data.get('formats', []):
+                if fmt.get('acodec') == 'opus' and fmt.get('ext') == 'webm':
+                    audio_url = fmt['url']
+                    try:
+                        return cls(discord.FFmpegOpusAudio(audio_url), data=data)
+                    except:
+                        continue
+            
+            audio_url = data['url']
+        else:
+            audio_url = ytdl.prepare_filename(data)
+
         try:
-            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
-        except discord.ClientException as e:
-            print(f"Error con FFmpeg: {e}")
-            # Fallback: intentar con opciones mínimas
+            # Intentar con FFmpegOpusAudio primero
+            return cls(discord.FFmpegOpusAudio(audio_url), data=data)
+        except Exception as e:
+            print(f"Error con FFmpegOpusAudio: {e}")
             try:
-                fallback_options = {'options': '-vn'}
-                return cls(discord.FFmpegPCMAudio(filename, **fallback_options), data=data)
-            except Exception as fallback_error:
-                print(f"Error incluso con fallback: {fallback_error}")
+                # Fallback a PCMAudio
+                return cls(discord.FFmpegPCMAudio(audio_url, options='-vn'), data=data)
+            except Exception as e2:
+                print(f"Error incluso con PCMAudio: {e2}")
                 return None
 
     def parse_duration(self, duration):
@@ -143,11 +147,9 @@ class MusicPlayer:
 
         try:
             if self.voice_client is None:
-                # Conectar por primera vez
                 self.voice_client = await self.ctx.author.voice.channel.connect()
                 print(f"🔊 Bot conectado al canal: {self.ctx.author.voice.channel.name}")
             elif self.voice_client.channel != self.ctx.author.voice.channel:
-                # Mover a otro canal
                 await self.voice_client.move_to(self.ctx.author.voice.channel)
                 print(f"🔊 Bot movido al canal: {self.ctx.author.voice.channel.name}")
             
@@ -165,14 +167,11 @@ class MusicPlayer:
         if next_song:
             self.now_playing = next_song
             
-            # Ajustar volumen
             if self.voice_client.source:
                 self.voice_client.source.volume = self.volume
             
-            # Reproducir canción
             self.voice_client.play(next_song, after=lambda e: asyncio.run_coroutine_threadsafe(self.play_next(), self.ctx.bot.loop))
             
-            # Información del canal actual
             channel = self.voice_client.channel
             listeners = len([member for member in channel.members if not member.bot])
             
@@ -200,7 +199,6 @@ class MusicPlayer:
             )
             await self.ctx.send(embed=embed)
             
-            # Desconectar después de 2 minutos de inactividad
             await asyncio.sleep(120)
             if self.voice_client and not self.voice_client.is_playing() and self.queue.is_empty():
                 await self.voice_client.disconnect()
@@ -211,7 +209,6 @@ class MusicPlayer:
         if not await self.connect():
             return None
 
-        # Verificar si es URL o búsqueda
         if not query.startswith(('http', 'ytsearch:')):
             query = f"ytsearch:{query}"
 
@@ -226,15 +223,12 @@ class MusicPlayer:
     async def stop_and_disconnect(self):
         """Detener música y desconectar"""
         if self.voice_client:
-            # Detener reproducción
             if self.voice_client.is_playing() or self.voice_client.is_paused():
                 self.voice_client.stop()
             
-            # Limpiar cola
             self.queue.clear()
             self.now_playing = None
             
-            # Desconectar
             await self.voice_client.disconnect()
             return True
         return False
@@ -290,10 +284,8 @@ class MusicControls(discord.ui.View):
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.music_cog.get_player(interaction.guild.id)
         if player and player.voice_client:
-            # Usar el nuevo método para detener y desconectar
             success = await player.stop_and_disconnect()
             if success:
-                # Remover el player del diccionario
                 if interaction.guild.id in self.music_cog.players:
                     del self.music_cog.players[interaction.guild.id]
                 
@@ -353,7 +345,6 @@ class Music(commands.Cog):
     @commands.hybrid_command(name='play', description='Reproducir música en el canal de voz')
     async def play(self, ctx, *, query: str):
         """Reproducir música desde YouTube para todos en el canal"""
-        # Verificar si el usuario está en un canal de voz
         if not ctx.author.voice:
             embed = discord.Embed(
                 title="❌ Error",
@@ -365,20 +356,17 @@ class Music(commands.Cog):
 
         guild_id = ctx.guild.id
         
-        # Crear player si no existe
         if guild_id not in self.players:
             self.players[guild_id] = MusicPlayer(ctx)
         
         player = self.players[guild_id]
         
-        # Mostrar que está buscando
         embed = discord.Embed(
             description=f"🔍 **Buscando:** `{query}`",
             color=discord.Color.blue()
         )
         search_msg = await ctx.send(embed=embed)
 
-        # Añadir a la cola
         song = await player.add_to_queue(query)
         
         if song:
@@ -387,7 +375,6 @@ class Music(commands.Cog):
             listeners = len([member for member in channel.members if not member.bot])
             
             if player.voice_client.is_playing() or player.voice_client.is_paused():
-                # Añadido a la cola
                 embed = discord.Embed(
                     title="🎵 Añadido a la Cola",
                     description=f"**{song.title}**",
@@ -404,13 +391,12 @@ class Music(commands.Cog):
                 
                 await search_msg.edit(embed=embed)
             else:
-                # Reproduciendo ahora
                 await search_msg.delete()
                 await player.play_next()
         else:
             embed = discord.Embed(
                 title="❌ Error",
-                description="No se pudo encontrar la canción. Verifica el nombre o URL.",
+                description="No se pudo encontrar o procesar la canción. Intenta con otro nombre o URL.",
                 color=discord.Color.red()
             )
             await search_msg.edit(embed=embed)
@@ -600,11 +586,9 @@ class Music(commands.Cog):
         if player and player.voice_client:
             channel_name = player.voice_client.channel.name
             
-            # Usar el nuevo método para detener y desconectar
             success = await player.stop_and_disconnect()
             
             if success:
-                # Remover el player del diccionario
                 if ctx.guild.id in self.players:
                     del self.players[ctx.guild.id]
                 
@@ -650,6 +634,51 @@ class Music(commands.Cog):
             embed = discord.Embed(
                 title="❌ Error",
                 description="No estoy conectado a ningún canal de voz.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name='shuffle', description='Mezclar la cola de reproducción')
+    async def shuffle(self, ctx):
+        """Mezclar aleatoriamente la cola de reproducción"""
+        player = self.get_player(ctx.guild.id)
+        
+        if player and len(player.queue) > 1:
+            import random
+            random.shuffle(player.queue._queue)
+            
+            embed = discord.Embed(
+                title="🔀 Cola Mezclada",
+                description="Las canciones en cola han sido mezcladas aleatoriamente.",
+                color=discord.Color.green()
+            )
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                title="❌ Error",
+                description="No hay suficientes canciones en la cola para mezclar.",
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
+    @commands.hybrid_command(name='remove', description='Remover una canción de la cola')
+    async def remove(self, ctx, index: int):
+        """Remover una canción específica de la cola"""
+        player = self.get_player(ctx.guild.id)
+        
+        if player and 1 <= index <= len(player.queue):
+            removed_song = player.queue.remove(index - 1)
+            
+            embed = discord.Embed(
+                title="🗑️ Canción Removida",
+                description=f"**{removed_song.title}** ha sido removida de la cola.",
+                color=discord.Color.orange()
+            )
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                title="❌ Error",
+                description="Índice inválido. Usa `/queue` para ver las posiciones.",
                 color=discord.Color.red()
             )
             await ctx.send(embed=embed)
