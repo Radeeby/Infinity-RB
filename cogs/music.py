@@ -21,8 +21,10 @@ ytdl_format_options = {
     'source_address': '0.0.0.0',
 }
 
+# FFMPEG OPTIONS MODIFICADAS para Railway
 ffmpeg_options = {
-    'options': '-vn -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
+    'options': '-vn -b:a 128k -ac 2'
 }
 
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -58,7 +60,19 @@ class YTDLSource(discord.PCMVolumeTransformer):
             return None
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        
+        # MODIFICADO: Sin especificar executable, dejar que discord.py lo maneje
+        try:
+            return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        except discord.ClientException as e:
+            print(f"Error con FFmpeg: {e}")
+            # Fallback: intentar con opciones mínimas
+            try:
+                fallback_options = {'options': '-vn'}
+                return cls(discord.FFmpegPCMAudio(filename, **fallback_options), data=data)
+            except Exception as fallback_error:
+                print(f"Error incluso con fallback: {fallback_error}")
+                return None
 
     def parse_duration(self, duration):
         if not duration:
@@ -209,6 +223,22 @@ class MusicPlayer:
             return player
         return None
 
+    async def stop_and_disconnect(self):
+        """Detener música y desconectar"""
+        if self.voice_client:
+            # Detener reproducción
+            if self.voice_client.is_playing() or self.voice_client.is_paused():
+                self.voice_client.stop()
+            
+            # Limpiar cola
+            self.queue.clear()
+            self.now_playing = None
+            
+            # Desconectar
+            await self.voice_client.disconnect()
+            return True
+        return False
+
 class MusicControls(discord.ui.View):
     def __init__(self, music_cog, ctx):
         super().__init__(timeout=180)
@@ -260,10 +290,17 @@ class MusicControls(discord.ui.View):
     async def stop(self, interaction: discord.Interaction, button: discord.ui.Button):
         player = self.music_cog.get_player(interaction.guild.id)
         if player and player.voice_client:
-            player.queue.clear()
-            player.voice_client.stop()
-            embed = discord.Embed(description="🛑 **Música detenida**", color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            # Usar el nuevo método para detener y desconectar
+            success = await player.stop_and_disconnect()
+            if success:
+                # Remover el player del diccionario
+                if interaction.guild.id in self.music_cog.players:
+                    del self.music_cog.players[interaction.guild.id]
+                
+                embed = discord.Embed(description="🛑 **Música detenida y bot desconectado**", color=discord.Color.red())
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Error al detener la música.", ephemeral=True)
         else:
             await interaction.response.send_message("❌ No hay música reproduciéndose.", ephemeral=True)
 
@@ -555,21 +592,35 @@ class Music(commands.Cog):
             )
             await ctx.send(embed=embed)
 
-    @commands.hybrid_command(name='stop', description='Detener la música y limpiar la cola')
+    @commands.hybrid_command(name='stop', description='Detener la música y desconectar el bot')
     async def stop(self, ctx):
-        """Detener la música para todos"""
+        """Detener la música y desconectar el bot del canal de voz"""
         player = self.get_player(ctx.guild.id)
         
         if player and player.voice_client:
-            player.queue.clear()
-            player.voice_client.stop()
+            channel_name = player.voice_client.channel.name
             
-            embed = discord.Embed(
-                title="🛑 Música Detenida",
-                description="La música se ha detenido y la cola se ha limpiado para todos los oyentes.",
-                color=discord.Color.red()
-            )
-            await ctx.send(embed=embed)
+            # Usar el nuevo método para detener y desconectar
+            success = await player.stop_and_disconnect()
+            
+            if success:
+                # Remover el player del diccionario
+                if ctx.guild.id in self.players:
+                    del self.players[ctx.guild.id]
+                
+                embed = discord.Embed(
+                    title="🛑 Música Detenida",
+                    description=f"La música se ha detenido y me he desconectado del canal **{channel_name}**.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="❌ Error",
+                    description="No se pudo detener la música correctamente.",
+                    color=discord.Color.red()
+                )
+                await ctx.send(embed=embed)
         else:
             embed = discord.Embed(
                 title="❌ Error",
@@ -627,7 +678,8 @@ class Music(commands.Cog):
                     
                     player.queue.clear()
                     await player.voice_client.disconnect()
-                    del self.players[member.guild.id]
+                    if member.guild.id in self.players:
+                        del self.players[member.guild.id]
                     print(f"🔇 Bot desconectado del canal {voice_channel.name} por inactividad")
 
 async def setup(bot):
